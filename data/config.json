@@ -1,0 +1,13 @@
+{
+  "members": [
+    "김혁진",
+    "전도영",
+    "전상권",
+    "이민우",
+    "서정욱"
+  ],
+  "court_fee": 11000,
+  "base_monthly_fee": 10000,
+  "weeks_per_month": 4,
+  "absence_deadline_note": "하루 전 불참은 전날(일요일) 밤 12시까지 통보"
+}
