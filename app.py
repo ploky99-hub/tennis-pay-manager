@@ -5,30 +5,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from calculator import Absence, Prepayment, calculate_settlement, calculate_transfers
-from storage import (
-    load_absences,
-    load_config,
-    load_prepayments,
-    save_absences,
-    save_config,
-    save_prepayments,
-)
-
-st.set_page_config(
-    page_title="강동 테린이 꿈나무방 정산",
-    page_icon="🎾",
-    layout="wide",
-)
-
-ABSENCE_LABELS = {
-    "day_before": "하루 전 불참 (익월 회비 차감)",
-    "same_day": "당일 불참 (차감 없음, 코트비 부담)",
-}
-
-
-def absence_label(absence_type: str) -> str:
-    return ABSENCE_LABELS.get(absence_type, absence_type)
+from calculator import Session, calculate_member_totals, calculate_monthly_settlements
+from storage import load_config, load_sessions, save_config, save_sessions
 
 
 def init_state() -> None:
@@ -36,21 +14,35 @@ def init_state() -> None:
         st.session_state.config = load_config()
 
 
+def session_label(session: Session) -> str:
+    names = ", ".join(session.participants)
+    return (
+        f"{session.week}주차 · {session.payer} · "
+        f"{session.amount_paid:,}원 · 참여 {len(session.participants)}명 ({names})"
+    )
+
+
 init_state()
 config = st.session_state.config
+members = config["members"]
+default_fee = config.get("default_court_fee", 11000)
+weeks_per_month = config.get("weeks_per_month", 4)
 
-st.title("🎾 강동 테린이 꿈나무방 정산")
-st.caption(
-    f"기본 월 회비 **{config['base_monthly_fee']:,}원** · "
-    f"코트비 **{config['court_fee']:,}원**/회 · "
-    f"{config['absence_deadline_note']}"
+st.set_page_config(
+    page_title="강동 테린이 꿈나무방 정산",
+    page_icon="🎾",
+    layout="wide",
 )
 
-tab_dashboard, tab_register, tab_payer, tab_settings = st.tabs(
-    ["📊 정산 현황", "📝 불참 등록", "👑 총무 설정", "⚙️ 설정"]
+st.title("🎾 강동 테린이 꿈나무방 정산")
+st.caption("매주 코트비를 선결제한 총무에게, 참여자들이 1/N으로 송금합니다.")
+
+tab_dashboard, tab_register, tab_settings = st.tabs(
+    ["📊 정산 현황", "📝 주차 등록", "⚙️ 설정"]
 )
 
 today = date.today()
+
 with tab_dashboard:
     col_y, col_m = st.columns(2)
     with col_y:
@@ -58,381 +50,232 @@ with tab_dashboard:
     with col_m:
         month = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
 
-    absences = load_absences(year, month)
-    prepayments = load_prepayments(year, month)
-    week_rows, member_rows = calculate_settlement(
-        members=config["members"],
-        absences=absences,
-        court_fee=config["court_fee"],
-        base_monthly_fee=config["base_monthly_fee"],
-        weeks_per_month=config["weeks_per_month"],
+    sessions = load_sessions(year, month)
+    settlements = calculate_monthly_settlements(sessions)
+
+    m1, m2 = st.columns(2)
+    m1.metric("등록된 주차", f"{len(settlements)}회")
+    m2.metric(
+        "이번 달 선결제 합계",
+        f"{sum(session.amount_paid for session in sessions):,}원",
     )
 
-    total_court_cost = config["court_fee"] * config["weeks_per_month"]
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("이번 달 예상 코트비", f"{total_court_cost:,}원")
-    m2.metric("멤버 수", f"{len(config['members'])}명")
-    m3.metric("등록된 불참", f"{len(absences)}건")
-
-    st.subheader("다음 달 납부 회비")
-    member_df = pd.DataFrame(
-        [
-            {
-                "이름": row.name,
-                "하루 전 불참": f"{row.day_before_count}회",
-                "당일 불참": f"{row.same_day_count}회",
-                "이번 달 차감액": f"{row.refund:,}원",
-                "다음 달 납부 회비": f"{row.next_month_fee:,}원",
-            }
-            for row in member_rows
-        ]
-    )
-    st.dataframe(member_df, use_container_width=True, hide_index=True)
-
-    st.subheader("주차별 정산 내역")
-    week_df = pd.DataFrame(
-        [
-            {
-                "주차": f"{row.week}주차",
-                "정산 인원": f"{row.participants}명",
-                "1인당 부담": f"{row.share_per_person:,}원",
-                "하루 전 불참": ", ".join(row.day_before_absent) or "-",
-                "당일 불참": ", ".join(row.same_day_absent) or "-",
-            }
-            for row in week_rows
-        ]
-    )
-    st.dataframe(week_df, use_container_width=True, hide_index=True)
-
-    st.subheader("💸 이번 달 송금 안내")
-    if not prepayments:
-        st.info("**총무 설정** 탭에서 선결제자와 금액을 등록하면 송금액이 계산됩니다.")
+    if not settlements:
+        st.info("**주차 등록** 탭에서 주차별 총무, 결제 금액, 참여자를 등록해 주세요.")
     else:
-        transfer_rows, treasurer_summaries = calculate_transfers(
-            member_rows, prepayments
-        )
-        payer1_name = prepayments[0].name
-        payer2_name = prepayments[1].name if len(prepayments) > 1 else None
-        total_prepaid = sum(p.amount for p in prepayments)
-
-        st.caption(
-            f"선결제 총액 **{total_prepaid:,}원** · "
-            f"{' / '.join(f'{p.name} {p.amount:,}원' for p in prepayments)}"
-        )
-
-        transfer_df = pd.DataFrame(
-            [
-                {
-                    "이름": row.name,
-                    "구분": row.role,
-                    "이번 달 차감액": f"{row.refund:,}원",
-                    "정산 금액": f"{row.settlement_fee:,}원",
-                    f"{payer1_name}에게": (
-                        f"{row.to_payer1:,}원"
-                        if row.to_payer1 > 0
-                        else "-"
-                    ),
-                    **(
+        for settlement in settlements:
+            st.subheader(f"{settlement.week}주차 송금 안내")
+            st.caption(
+                f"**{settlement.payer}**님이 **{settlement.amount_paid:,}원** 선결제 · "
+                f"참여 {len(settlement.participants)}명 · "
+                f"1인당 **{settlement.share_per_person:,}원**"
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
                         {
-                            f"{payer2_name}에게": (
-                                f"{row.to_payer2:,}원"
-                                if row.to_payer2 > 0
+                            "이름": payment.name,
+                            f"{settlement.payer}에게": (
+                                f"{payment.amount:,}원"
+                                if payment.amount > 0
                                 else "-"
-                            )
+                            ),
+                            "안내": payment.note,
                         }
-                        if payer2_name
-                        else {}
-                    ),
-                    "송금 안내": row.action,
-                }
-                for row in transfer_rows
-            ]
-        )
-        st.dataframe(transfer_df, use_container_width=True, hide_index=True)
-
-        for summary in treasurer_summaries:
-            st.success(
-                f"**{summary.name}**님: 다른 멤버들로부터 "
-                f"**{summary.receive_from_others:,}원** 받으시면 "
-                f"(선결제 {summary.prepaid:,}원) 정산됩니다."
+                        for payment in settlement.payments
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
             )
 
-    with st.expander("이번 달 불참 기록"):
-        if absences:
-            record_df = pd.DataFrame(
-                [
-                    {
-                        "이름": a.name,
-                        "주차": f"{a.week}주차",
-                        "유형": absence_label(a.absence_type),
-                    }
-                    for a in absences
-                ]
+        member_totals = calculate_member_totals(settlements)
+        if member_totals:
+            st.subheader("이번 달 누적 송금 요약")
+            payer_names = sorted(
+                {payer for item in member_totals for payer in item.total_to_payer}
             )
-            st.dataframe(record_df, use_container_width=True, hide_index=True)
-            st.caption("개별 수정·삭제는 **불참 등록** 탭에서 할 수 있습니다.")
-
-            if st.button("이번 달 기록 전체 삭제", type="primary"):
-                save_absences(year, month, [])
-                st.success("기록을 초기화했습니다.")
-                st.rerun()
-        else:
-            st.info("등록된 불참 기록이 없습니다.")
+            summary_rows = []
+            for item in member_totals:
+                row = {"이름": item.name}
+                for payer in payer_names:
+                    amount = item.total_to_payer.get(payer, 0)
+                    row[f"{payer}에게"] = f"{amount:,}원" if amount > 0 else "-"
+                summary_rows.append(row)
+            st.dataframe(
+                pd.DataFrame(summary_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 with tab_register:
-    st.subheader("불참 / 사정 등록")
+    st.subheader("주차별 코트비 등록")
+    st.caption(
+        "해당 주에 코트비를 낸 사람, 실제 결제 금액, 참여자를 입력하세요. "
+        "다둥이 할인 등으로 5,500원이어도 그대로 입력하면 됩니다."
+    )
+
     reg_y = st.number_input(
         "등록 연도", min_value=2024, max_value=2035, value=today.year, key="reg_year"
     )
     reg_m = st.selectbox(
         "등록 월", list(range(1, 13)), index=today.month - 1, key="reg_month"
     )
-    current_absences = load_absences(reg_y, reg_m)
+    current_sessions = load_sessions(reg_y, reg_m)
 
-    with st.form("absence_form", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            name = st.selectbox("이름", config["members"])
-        with c2:
-            week = st.selectbox(
-                "주차",
-                list(range(1, config["weeks_per_month"] + 1)),
-                format_func=lambda w: f"{w}주차",
-            )
-        with c3:
-            absence_type = st.selectbox(
-                "불참 유형",
-                ["day_before", "same_day"],
-                format_func=lambda t: ABSENCE_LABELS[t],
-            )
-
+    with st.form("session_form", clear_on_submit=True):
+        week = st.selectbox(
+            "주차",
+            list(range(1, weeks_per_month + 1)),
+            format_func=lambda value: f"{value}주차",
+        )
+        payer = st.selectbox("비용 지불자 (총무)", members)
+        amount_paid = st.number_input(
+            "실제 결제 금액 (원)",
+            min_value=0,
+            step=500,
+            value=default_fee,
+        )
+        participants = st.multiselect(
+            "참여자",
+            members,
+            default=members,
+            help="그날 코트에 나온 사람만 선택하세요.",
+        )
         submitted = st.form_submit_button("등록하기", use_container_width=True)
 
     if submitted:
-        updated = False
-        for absence in current_absences:
-            if absence.name == name and absence.week == week:
-                absence.absence_type = absence_type
-                updated = True
-                break
-        if updated:
-            save_absences(reg_y, reg_m, current_absences)
-            st.success(
-                f"[{reg_y}년 {reg_m}월 {week}주차] {name}님 — "
-                f"{absence_label(absence_type)}(으)로 수정했습니다."
-            )
+        if amount_paid <= 0:
+            st.error("결제 금액을 입력해 주세요.")
+        elif not participants:
+            st.error("참여자를 1명 이상 선택해 주세요.")
         else:
-            current_absences.append(
-                Absence(name=name, week=week, absence_type=absence_type)
+            new_session = Session(
+                week=week,
+                payer=payer,
+                amount_paid=int(amount_paid),
+                participants=participants,
             )
-            save_absences(reg_y, reg_m, current_absences)
-            st.success(
-                f"[{reg_y}년 {reg_m}월 {week}주차] {name}님 — "
-                f"{absence_label(absence_type)} 등록 완료!"
-            )
-        st.rerun()
+            updated = False
+            for index, session in enumerate(current_sessions):
+                if session.week == week:
+                    current_sessions[index] = new_session
+                    updated = True
+                    break
+            if not updated:
+                current_sessions.append(new_session)
+            save_sessions(reg_y, reg_m, current_sessions)
+            message = "수정했습니다." if updated else "등록했습니다."
+            st.success(f"{reg_y}년 {reg_m}월 {week}주차를 {message}")
+            st.rerun()
 
-    if current_absences:
-        st.markdown("#### 현재 등록된 기록")
+    if current_sessions:
+        st.markdown("#### 등록된 주차")
         st.dataframe(
             pd.DataFrame(
                 [
                     {
-                        "이름": a.name,
-                        "주차": f"{a.week}주차",
-                        "유형": absence_label(a.absence_type),
+                        "주차": f"{session.week}주차",
+                        "비용 지불자": session.payer,
+                        "결제 금액": f"{session.amount_paid:,}원",
+                        "참여자": ", ".join(session.participants),
                     }
-                    for a in current_absences
+                    for session in current_sessions
                 ]
             ),
             use_container_width=True,
             hide_index=True,
         )
 
-        st.markdown("#### 기록 수정 / 삭제")
-        st.caption(
-            "사정이 바뀌어 다시 참석하면 **참석으로 변경**을 누르세요. "
-            "불참 유형만 바꿀 수도 있습니다."
-        )
+        st.markdown("#### 주차 수정 / 삭제")
+        labels = [session_label(session) for session in current_sessions]
 
-        record_labels = [
-            f"{a.name} · {a.week}주차 · {absence_label(a.absence_type)}"
-            for a in current_absences
-        ]
+        with st.form("edit_session_form"):
+            selected_label = st.selectbox("수정할 주차", labels)
+            selected_index = labels.index(selected_label)
+            selected = current_sessions[selected_index]
 
-        with st.form("edit_absence_form"):
-            selected_label = st.selectbox("수정할 기록", record_labels)
-            selected_idx = record_labels.index(selected_label)
-            selected = current_absences[selected_idx]
-
-            new_type = st.selectbox(
-                "변경할 불참 유형",
-                ["day_before", "same_day"],
-                index=0 if selected.absence_type == "day_before" else 1,
-                format_func=lambda t: ABSENCE_LABELS[t],
-                key="edit_absence_type",
+            edit_payer = st.selectbox(
+                "비용 지불자 (총무)",
+                members,
+                index=members.index(selected.payer),
+            )
+            edit_amount = st.number_input(
+                "실제 결제 금액 (원)",
+                min_value=0,
+                step=500,
+                value=selected.amount_paid,
+            )
+            edit_participants = st.multiselect(
+                "참여자",
+                members,
+                default=selected.participants,
             )
 
             c1, c2 = st.columns(2)
             with c1:
-                save_edit = st.form_submit_button(
-                    "유형 변경 저장", use_container_width=True
-                )
+                save_edit = st.form_submit_button("수정 저장", use_container_width=True)
             with c2:
-                mark_attending = st.form_submit_button(
-                    "참석으로 변경 (삭제)", use_container_width=True
+                delete_session = st.form_submit_button(
+                    "주차 삭제", use_container_width=True
                 )
 
         if save_edit:
-            current_absences[selected_idx].absence_type = new_type
-            save_absences(reg_y, reg_m, current_absences)
-            st.success(f"{selected.name}님 {selected.week}주차 기록을 수정했습니다.")
+            if edit_amount <= 0:
+                st.error("결제 금액을 입력해 주세요.")
+            elif not edit_participants:
+                st.error("참여자를 1명 이상 선택해 주세요.")
+            else:
+                current_sessions[selected_index] = Session(
+                    week=selected.week,
+                    payer=edit_payer,
+                    amount_paid=int(edit_amount),
+                    participants=edit_participants,
+                )
+                save_sessions(reg_y, reg_m, current_sessions)
+                st.success(f"{selected.week}주차를 수정했습니다.")
+                st.rerun()
+
+        if delete_session:
+            current_sessions.pop(selected_index)
+            save_sessions(reg_y, reg_m, current_sessions)
+            st.success(f"{selected.week}주차 기록을 삭제했습니다.")
             st.rerun()
-
-        if mark_attending:
-            current_absences.pop(selected_idx)
-            save_absences(reg_y, reg_m, current_absences)
-            st.success(
-                f"{selected.name}님 {selected.week}주차 불참 기록을 삭제했습니다. "
-                "참석으로 반영됩니다."
-            )
-            st.rerun()
-
-with tab_payer:
-    st.subheader("👑 이달의 선결제자(총무) 설정")
-    st.caption(
-        "코트비를 사비로 먼저 낸 사람을 등록하세요. "
-        "최대 2명까지 지정할 수 있으며, 선결제 비율에 따라 송금액이 나뉩니다."
-    )
-
-    pay_y = st.number_input(
-        "연도", min_value=2024, max_value=2035, value=today.year, key="pay_year"
-    )
-    pay_m = st.selectbox(
-        "월", list(range(1, 13)), index=today.month - 1, key="pay_month"
-    )
-    saved_prepayments = load_prepayments(pay_y, pay_m)
-    default_total = config["court_fee"] * config["weeks_per_month"]
-    half = default_total // 2
-
-    saved_payer1 = saved_prepayments[0].name if saved_prepayments else config["members"][0]
-    saved_amount1 = saved_prepayments[0].amount if saved_prepayments else half
-    use_second = len(saved_prepayments) > 1
-    saved_payer2 = (
-        saved_prepayments[1].name
-        if len(saved_prepayments) > 1
-        else (config["members"][1] if len(config["members"]) > 1 else config["members"][0])
-    )
-    saved_amount2 = saved_prepayments[1].amount if len(saved_prepayments) > 1 else half
-
-    with st.form("payer_form"):
-        c1, c2 = st.columns(2)
-        with c1:
-            payer1 = st.selectbox(
-                "첫 번째 총무",
-                config["members"],
-                index=(
-                    config["members"].index(saved_payer1)
-                    if saved_payer1 in config["members"]
-                    else 0
-                ),
-            )
-            amount1 = st.number_input(
-                f"{payer1}님 선결제 금액 (원)",
-                min_value=0,
-                step=1000,
-                value=saved_amount1,
-            )
-        with c2:
-            enable_payer2 = st.checkbox("두 번째 총무 사용", value=use_second)
-            payer2_options = [m for m in config["members"] if m != payer1]
-            payer2_index = (
-                payer2_options.index(saved_payer2)
-                if saved_payer2 in payer2_options
-                else 0
-            )
-            payer2 = st.selectbox(
-                "두 번째 총무",
-                payer2_options,
-                index=payer2_index,
-                disabled=not enable_payer2,
-            )
-            amount2 = st.number_input(
-                f"{payer2}님 선결제 금액 (원)" if enable_payer2 else "두 번째 선결제 금액 (원)",
-                min_value=0,
-                step=1000,
-                value=saved_amount2 if enable_payer2 else 0,
-                disabled=not enable_payer2,
-            )
-
-        save_payers = st.form_submit_button("총무 설정 저장", use_container_width=True)
-
-    if save_payers:
-        new_prepayments = [Prepayment(name=payer1, amount=int(amount1))]
-        if enable_payer2 and int(amount2) > 0:
-            new_prepayments.append(Prepayment(name=payer2, amount=int(amount2)))
-
-        if not new_prepayments or new_prepayments[0].amount <= 0:
-            st.error("첫 번째 총무의 선결제 금액을 입력해 주세요.")
-        else:
-            save_prepayments(pay_y, pay_m, new_prepayments)
-            st.success("총무 설정을 저장했습니다. **정산 현황** 탭에서 송금액을 확인하세요.")
-            st.rerun()
-
-    if saved_prepayments:
-        st.markdown("#### 저장된 총무")
-        for p in saved_prepayments:
-            st.write(f"- **{p.name}**: {p.amount:,}원 선결제")
 
 with tab_settings:
     st.subheader("모임 설정")
-    st.info(
-        "멤버 이름, 코트비, 월 회비를 수정할 수 있습니다. "
-        "변경 사항은 서버에 저장됩니다."
-    )
 
     with st.form("settings_form"):
         members_text = st.text_area(
             "멤버 목록 (한 줄에 한 명)",
-            value="\n".join(config["members"]),
+            value="\n".join(members),
             height=150,
         )
-        court_fee = st.number_input(
-            "코트비 (원/회)",
-            min_value=1000,
+        default_court_fee = st.number_input(
+            "기본 코트비 (원, 등록 시 기본값)",
+            min_value=0,
             step=500,
-            value=config["court_fee"],
-        )
-        base_fee = st.number_input(
-            "기본 월 회비 (원)",
-            min_value=1000,
-            step=1000,
-            value=config["base_monthly_fee"],
+            value=default_fee,
         )
         weeks = st.number_input(
             "월별 모임 횟수",
             min_value=1,
             max_value=5,
-            value=config["weeks_per_month"],
-        )
-        deadline_note = st.text_input(
-            "하루 전 불참 기준 안내 문구",
-            value=config["absence_deadline_note"],
+            value=weeks_per_month,
         )
         save_clicked = st.form_submit_button("설정 저장", use_container_width=True)
 
     if save_clicked:
-        members = [line.strip() for line in members_text.splitlines() if line.strip()]
-        if len(members) < 2:
+        new_members = [
+            line.strip() for line in members_text.splitlines() if line.strip()
+        ]
+        if len(new_members) < 2:
             st.error("멤버는 최소 2명 이상이어야 합니다.")
         else:
             new_config = {
-                "members": members,
-                "court_fee": int(court_fee),
-                "base_monthly_fee": int(base_fee),
+                "members": new_members,
+                "default_court_fee": int(default_court_fee),
                 "weeks_per_month": int(weeks),
-                "absence_deadline_note": deadline_note.strip(),
             }
             save_config(new_config)
             st.session_state.config = new_config
@@ -441,6 +284,6 @@ with tab_settings:
 
 st.divider()
 st.markdown(
-    "**정산 규칙** · 하루 전 불참: 해당 주 코트비 n분의 1만큼 익월 회비에서 차감 · "
-    "당일 불참: 차감 없음 · 총무에게 송금: 정산 금액을 선결제 비율로 분배"
+    "**정산 규칙** · 해당 주 결제 금액 ÷ 참여 인원 = 1인당 송금액 · "
+    "비용 지불자 본인은 송금하지 않음"
 )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from calculator import Absence, Prepayment
+from calculator import Session
 
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
@@ -42,67 +42,45 @@ def month_file(year: int, month: int) -> Path:
 def _load_month_raw(year: int, month: int) -> dict:
     path = month_file(year, month)
     if not path.exists():
-        return {"year": year, "month": month, "absences": [], "prepayments": []}
+        return {"year": year, "month": month, "sessions": []}
 
     with path.open(encoding="utf-8") as f:
         raw = json.load(f)
 
-    raw.setdefault("absences", [])
-    raw.setdefault("prepayments", [])
+    raw.setdefault("sessions", [])
     return raw
 
 
-def load_absences(year: int, month: int) -> list[Absence]:
+def load_sessions(year: int, month: int) -> list[Session]:
     raw = _load_month_raw(year, month)
-    return [
-        Absence(
-            name=item["name"],
-            week=int(item["week"]),
-            absence_type=item["absence_type"],
+    sessions: list[Session] = []
+    for item in raw["sessions"]:
+        participants = list(dict.fromkeys(item.get("participants", [])))
+        sessions.append(
+            Session(
+                week=int(item["week"]),
+                payer=item["payer"],
+                amount_paid=int(item["amount_paid"]),
+                participants=participants,
+            )
         )
-        for item in raw["absences"]
-    ]
+    return sorted(sessions, key=lambda session: session.week)
 
 
-def load_prepayments(year: int, month: int) -> list[Prepayment]:
-    raw = _load_month_raw(year, month)
-    return [
-        Prepayment(name=item["name"], amount=int(item["amount"]))
-        for item in raw["prepayments"]
-        if int(item.get("amount", 0)) > 0
-    ]
-
-
-def save_absences(year: int, month: int, absences: list[Absence]) -> None:
-    raw = _load_month_raw(year, month)
-    raw["absences"] = [
-        {
-            "name": a.name,
-            "week": a.week,
-            "absence_type": a.absence_type,
-        }
-        for a in absences
-    ]
-    _save_month_raw(year, month, raw)
-
-
-def save_prepayments(year: int, month: int, prepayments: list[Prepayment]) -> None:
-    raw = _load_month_raw(year, month)
-    raw["prepayments"] = [
-        {"name": p.name, "amount": p.amount}
-        for p in prepayments
-        if p.amount > 0
-    ]
-    _save_month_raw(year, month, raw)
-
-
-def _save_month_raw(year: int, month: int, raw: dict) -> None:
-    path = month_file(year, month)
+def save_sessions(year: int, month: int, sessions: list[Session]) -> None:
     payload = {
         "year": year,
         "month": month,
-        "absences": raw.get("absences", []),
-        "prepayments": raw.get("prepayments", []),
+        "sessions": [
+            {
+                "week": session.week,
+                "payer": session.payer,
+                "amount_paid": session.amount_paid,
+                "participants": session.participants,
+            }
+            for session in sorted(sessions, key=lambda session: session.week)
+        ],
     }
+    path = month_file(year, month)
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)

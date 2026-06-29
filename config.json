@@ -1,7 +1,5 @@
 {
   "members": ["멤버A", "멤버B", "멤버C", "멤버D", "멤버E"],
-  "court_fee": 11000,
-  "base_monthly_fee": 10000,
-  "weeks_per_month": 4,
-  "absence_deadline_note": "하루 전 불참은 전날(일요일) 밤 10시까지 통보"
+  "default_court_fee": 11000,
+  "weeks_per_month": 4
 }
