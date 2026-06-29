@@ -5,8 +5,15 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from calculator import Absence, calculate_settlement
-from storage import load_absences, load_config, save_absences, save_config
+from calculator import Absence, Prepayment, calculate_settlement, calculate_transfers
+from storage import (
+    load_absences,
+    load_config,
+    load_prepayments,
+    save_absences,
+    save_config,
+    save_prepayments,
+)
 
 st.set_page_config(
     page_title="강동 테린이 꿈나무방 정산",
@@ -39,8 +46,8 @@ st.caption(
     f"{config['absence_deadline_note']}"
 )
 
-tab_dashboard, tab_register, tab_settings = st.tabs(
-    ["📊 정산 현황", "📝 불참 등록", "⚙️ 설정"]
+tab_dashboard, tab_register, tab_payer, tab_settings = st.tabs(
+    ["📊 정산 현황", "📝 불참 등록", "👑 총무 설정", "⚙️ 설정"]
 )
 
 today = date.today()
@@ -52,6 +59,7 @@ with tab_dashboard:
         month = st.selectbox("월", list(range(1, 13)), index=today.month - 1)
 
     absences = load_absences(year, month)
+    prepayments = load_prepayments(year, month)
     week_rows, member_rows = calculate_settlement(
         members=config["members"],
         absences=absences,
@@ -96,6 +104,59 @@ with tab_dashboard:
         ]
     )
     st.dataframe(week_df, use_container_width=True, hide_index=True)
+
+    st.subheader("💸 이번 달 송금 안내")
+    if not prepayments:
+        st.info("**총무 설정** 탭에서 선결제자와 금액을 등록하면 송금액이 계산됩니다.")
+    else:
+        transfer_rows, treasurer_summaries = calculate_transfers(
+            member_rows, prepayments
+        )
+        payer1_name = prepayments[0].name
+        payer2_name = prepayments[1].name if len(prepayments) > 1 else None
+        total_prepaid = sum(p.amount for p in prepayments)
+
+        st.caption(
+            f"선결제 총액 **{total_prepaid:,}원** · "
+            f"{' / '.join(f'{p.name} {p.amount:,}원' for p in prepayments)}"
+        )
+
+        transfer_df = pd.DataFrame(
+            [
+                {
+                    "이름": row.name,
+                    "구분": row.role,
+                    "이번 달 차감액": f"{row.refund:,}원",
+                    "정산 금액": f"{row.settlement_fee:,}원",
+                    f"{payer1_name}에게": (
+                        f"{row.to_payer1:,}원"
+                        if row.to_payer1 > 0
+                        else "-"
+                    ),
+                    **(
+                        {
+                            f"{payer2_name}에게": (
+                                f"{row.to_payer2:,}원"
+                                if row.to_payer2 > 0
+                                else "-"
+                            )
+                        }
+                        if payer2_name
+                        else {}
+                    ),
+                    "송금 안내": row.action,
+                }
+                for row in transfer_rows
+            ]
+        )
+        st.dataframe(transfer_df, use_container_width=True, hide_index=True)
+
+        for summary in treasurer_summaries:
+            st.success(
+                f"**{summary.name}**님: 다른 멤버들로부터 "
+                f"**{summary.receive_from_others:,}원** 받으시면 "
+                f"(선결제 {summary.prepaid:,}원) 정산됩니다."
+            )
 
     with st.expander("이번 달 불참 기록"):
         if absences:
@@ -238,6 +299,92 @@ with tab_register:
             )
             st.rerun()
 
+with tab_payer:
+    st.subheader("👑 이달의 선결제자(총무) 설정")
+    st.caption(
+        "코트비를 사비로 먼저 낸 사람을 등록하세요. "
+        "최대 2명까지 지정할 수 있으며, 선결제 비율에 따라 송금액이 나뉩니다."
+    )
+
+    pay_y = st.number_input(
+        "연도", min_value=2024, max_value=2035, value=today.year, key="pay_year"
+    )
+    pay_m = st.selectbox(
+        "월", list(range(1, 13)), index=today.month - 1, key="pay_month"
+    )
+    saved_prepayments = load_prepayments(pay_y, pay_m)
+    default_total = config["court_fee"] * config["weeks_per_month"]
+    half = default_total // 2
+
+    saved_payer1 = saved_prepayments[0].name if saved_prepayments else config["members"][0]
+    saved_amount1 = saved_prepayments[0].amount if saved_prepayments else half
+    use_second = len(saved_prepayments) > 1
+    saved_payer2 = (
+        saved_prepayments[1].name
+        if len(saved_prepayments) > 1
+        else (config["members"][1] if len(config["members"]) > 1 else config["members"][0])
+    )
+    saved_amount2 = saved_prepayments[1].amount if len(saved_prepayments) > 1 else half
+
+    with st.form("payer_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            payer1 = st.selectbox(
+                "첫 번째 총무",
+                config["members"],
+                index=(
+                    config["members"].index(saved_payer1)
+                    if saved_payer1 in config["members"]
+                    else 0
+                ),
+            )
+            amount1 = st.number_input(
+                f"{payer1}님 선결제 금액 (원)",
+                min_value=0,
+                step=1000,
+                value=saved_amount1,
+            )
+        with c2:
+            enable_payer2 = st.checkbox("두 번째 총무 사용", value=use_second)
+            payer2_options = [m for m in config["members"] if m != payer1]
+            payer2_index = (
+                payer2_options.index(saved_payer2)
+                if saved_payer2 in payer2_options
+                else 0
+            )
+            payer2 = st.selectbox(
+                "두 번째 총무",
+                payer2_options,
+                index=payer2_index,
+                disabled=not enable_payer2,
+            )
+            amount2 = st.number_input(
+                f"{payer2}님 선결제 금액 (원)" if enable_payer2 else "두 번째 선결제 금액 (원)",
+                min_value=0,
+                step=1000,
+                value=saved_amount2 if enable_payer2 else 0,
+                disabled=not enable_payer2,
+            )
+
+        save_payers = st.form_submit_button("총무 설정 저장", use_container_width=True)
+
+    if save_payers:
+        new_prepayments = [Prepayment(name=payer1, amount=int(amount1))]
+        if enable_payer2 and int(amount2) > 0:
+            new_prepayments.append(Prepayment(name=payer2, amount=int(amount2)))
+
+        if not new_prepayments or new_prepayments[0].amount <= 0:
+            st.error("첫 번째 총무의 선결제 금액을 입력해 주세요.")
+        else:
+            save_prepayments(pay_y, pay_m, new_prepayments)
+            st.success("총무 설정을 저장했습니다. **정산 현황** 탭에서 송금액을 확인하세요.")
+            st.rerun()
+
+    if saved_prepayments:
+        st.markdown("#### 저장된 총무")
+        for p in saved_prepayments:
+            st.write(f"- **{p.name}**: {p.amount:,}원 선결제")
+
 with tab_settings:
     st.subheader("모임 설정")
     st.info(
@@ -295,5 +442,5 @@ with tab_settings:
 st.divider()
 st.markdown(
     "**정산 규칙** · 하루 전 불참: 해당 주 코트비 n분의 1만큼 익월 회비에서 차감 · "
-    "당일 불참: 차감 없음 (출석한 것과 동일하게 코트비 부담)"
+    "당일 불참: 차감 없음 · 총무에게 송금: 정산 금액을 선결제 비율로 분배"
 )

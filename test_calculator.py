@@ -1,4 +1,9 @@
-from calculator import Absence, calculate_settlement
+from calculator import (
+    Absence,
+    Prepayment,
+    calculate_settlement,
+    calculate_transfers,
+)
 
 
 def test_day_before_refund_matches_example():
@@ -43,3 +48,74 @@ def test_multiple_day_before_same_week():
     by_name = {row.name: row for row in member_rows}
     assert by_name["D"].refund == 3666
     assert by_name["E"].refund == 3666
+
+
+def test_single_treasurer_transfer():
+    members = ["A", "B", "C", "D", "E"]
+    _, member_rows = calculate_settlement(
+        members=members,
+        absences=[],
+        court_fee=11000,
+        base_monthly_fee=10000,
+        weeks_per_month=4,
+    )
+    transfer_rows, summaries = calculate_transfers(
+        member_rows, [Prepayment(name="A", amount=44000)]
+    )
+    by_name = {row.name: row for row in transfer_rows}
+
+    assert by_name["A"].to_payer1 == 0
+    assert by_name["B"].to_payer1 == 10000
+    assert summaries[0].name == "A"
+    assert summaries[0].receive_from_others == 40000
+
+
+def test_dual_treasurer_split_by_ratio():
+    members = ["A", "B", "C", "D", "E"]
+    _, member_rows = calculate_settlement(
+        members=members,
+        absences=[],
+        court_fee=11000,
+        base_monthly_fee=10000,
+        weeks_per_month=4,
+    )
+    transfer_rows, summaries = calculate_transfers(
+        member_rows,
+        [
+            Prepayment(name="A", amount=33000),
+            Prepayment(name="B", amount=11000),
+        ],
+    )
+    by_name = {row.name: row for row in transfer_rows}
+
+    assert by_name["C"].to_payer1 == 7500
+    assert by_name["C"].to_payer2 == 2500
+    assert by_name["A"].to_payer1 == 0
+    assert by_name["B"].to_payer2 == 0
+
+    summary_by_name = {s.name: s for s in summaries}
+    assert summary_by_name["A"].receive_from_others == 22500
+    assert summary_by_name["B"].receive_from_others == 7500
+
+
+def test_dual_treasurer_with_day_before_absence():
+    members = ["A", "B", "C", "D", "E"]
+    absences = [Absence(name="C", week=3, absence_type="day_before")]
+    _, member_rows = calculate_settlement(
+        members=members,
+        absences=absences,
+        court_fee=11000,
+        base_monthly_fee=10000,
+        weeks_per_month=4,
+    )
+    transfer_rows, _ = calculate_transfers(
+        member_rows,
+        [
+            Prepayment(name="A", amount=33000),
+            Prepayment(name="B", amount=11000),
+        ],
+    )
+    by_name = {row.name: row for row in transfer_rows}
+
+    assert by_name["C"].settlement_fee == 7250
+    assert by_name["C"].to_payer1 + by_name["C"].to_payer2 == 7250
