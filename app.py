@@ -380,18 +380,19 @@ with tab_settings:
             new_members = parse_members_text(members_text)
         except ValueError as error:
             st.error(f"멤버 형식 오류: {error}")
-        elif len(new_members) < 2:
-            st.error("멤버는 최소 2명 이상이어야 합니다.")
         else:
-            new_config = {
-                "members": new_members,
-                "default_court_fee": int(default_court_fee),
-                "weeks_per_month": int(weeks),
-            }
-            save_config(new_config)
-            st.session_state.config = new_config
-            st.success("설정을 저장했습니다.")
-            st.rerun()
+            if len(new_members) < 2:
+                st.error("멤버는 최소 2명 이상이어야 합니다.")
+            else:
+                new_config = {
+                    "members": new_members,
+                    "default_court_fee": int(default_court_fee),
+                    "weeks_per_month": int(weeks),
+                }
+                save_config(new_config)
+                st.session_state.config = new_config
+                st.success("설정을 저장했습니다.")
+                st.rerun()
 
     st.markdown("#### 멤버 안내")
     for member in members:
