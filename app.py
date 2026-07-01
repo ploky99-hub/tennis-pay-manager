@@ -18,8 +18,7 @@ from storage import load_config, load_sessions, save_config, save_sessions
 
 
 def init_state() -> None:
-    if "config" not in st.session_state:
-        st.session_state.config = load_config()
+    st.session_state.config = load_config()
 
 
 def session_label(session: Session, members: list[dict]) -> str:
@@ -207,52 +206,54 @@ with tab_register:
     )
     current_sessions = load_sessions(reg_y, reg_m)
 
-    with st.form("session_form", clear_on_submit=True):
-        week = st.selectbox(
-            "주차",
-            list(range(1, weeks_per_month + 1)),
-            format_func=lambda value: f"{value}주차",
-        )
-        payer_count = st.number_input(
-            "비용 지불자 수",
-            min_value=1,
-            max_value=len(names),
-            value=1,
-            step=1,
-        )
-        payers = payer_inputs(
-            members=members,
-            names=names,
-            payer_count=int(payer_count),
-            saved_payers=[],
-            default_court_fee=default_fee,
-            key_prefix="new",
-        )
-        participants = st.multiselect(
-            "참여자",
-            names,
-            default=names,
-            format_func=lambda value: member_label(members, value),
-            help="그날 코트에 나온 사람만 선택하세요.",
-        )
-        submitted = st.form_submit_button("등록하기", use_container_width=True)
+    st.markdown("#### 새 주차 등록")
+    new_week = st.selectbox(
+        "주차",
+        list(range(1, weeks_per_month + 1)),
+        format_func=lambda value: f"{value}주차",
+        key="new_week",
+    )
+    new_payer_count = st.number_input(
+        "비용 지불자 수",
+        min_value=1,
+        max_value=len(names),
+        value=1,
+        step=1,
+        key="new_payer_count",
+    )
+    new_payers = payer_inputs(
+        members=members,
+        names=names,
+        payer_count=int(new_payer_count),
+        saved_payers=[],
+        default_court_fee=default_fee,
+        key_prefix="new",
+    )
+    new_participants = st.multiselect(
+        "참여자",
+        names,
+        default=names,
+        format_func=lambda value: member_label(members, value),
+        help="그날 코트에 나온 사람만 선택하세요.",
+        key="new_participants",
+    )
 
-    if submitted:
-        if not payers:
+    if st.button("등록하기", use_container_width=True, key="create_session"):
+        if not new_payers:
             st.error("비용 지불자와 결제 금액을 입력해 주세요.")
-        elif not participants:
+        elif not new_participants:
             st.error("참여자를 1명 이상 선택해 주세요.")
-        elif len({payer.name for payer in payers}) != len(payers):
+        elif len({payer.name for payer in new_payers}) != len(new_payers):
             st.error("같은 사람을 비용 지불자로 중복 선택할 수 없습니다.")
         else:
             new_session = Session(
-                week=week,
-                payers=payers,
-                participants=participants,
+                week=new_week,
+                payers=new_payers,
+                participants=new_participants,
             )
             updated = False
             for index, session in enumerate(current_sessions):
-                if session.week == week:
+                if session.week == new_week:
                     current_sessions[index] = new_session
                     updated = True
                     break
@@ -260,7 +261,7 @@ with tab_register:
                 current_sessions.append(new_session)
             save_sessions(reg_y, reg_m, current_sessions)
             message = "수정했습니다." if updated else "등록했습니다."
-            st.success(f"{reg_y}년 {reg_m}월 {week}주차를 {message}")
+            st.success(f"{reg_y}년 {reg_m}월 {new_week}주차를 {message}")
             st.rerun()
 
     if current_sessions:
@@ -288,44 +289,36 @@ with tab_register:
 
         st.markdown("#### 주차 수정 / 삭제")
         labels = [session_label(session, members) for session in current_sessions]
+        selected_label = st.selectbox("수정할 주차", labels, key="edit_session_label")
+        selected_index = labels.index(selected_label)
+        selected = current_sessions[selected_index]
 
-        with st.form("edit_session_form"):
-            selected_label = st.selectbox("수정할 주차", labels)
-            selected_index = labels.index(selected_label)
-            selected = current_sessions[selected_index]
+        edit_payer_count = st.number_input(
+            "비용 지불자 수",
+            min_value=1,
+            max_value=len(names),
+            value=len(selected.payers),
+            step=1,
+            key="edit_payer_count",
+        )
+        edit_payers = payer_inputs(
+            members=members,
+            names=names,
+            payer_count=int(edit_payer_count),
+            saved_payers=selected.payers,
+            default_court_fee=default_fee,
+            key_prefix="edit",
+        )
+        edit_participants = st.multiselect(
+            "참여자",
+            names,
+            default=selected.participants,
+            format_func=lambda value: member_label(members, value),
+            key="edit_participants",
+        )
 
-            edit_payer_count = st.number_input(
-                "비용 지불자 수",
-                min_value=1,
-                max_value=len(names),
-                value=len(selected.payers),
-                step=1,
-                key="edit_payer_count",
-            )
-            edit_payers = payer_inputs(
-                members=members,
-                names=names,
-                payer_count=int(edit_payer_count),
-                saved_payers=selected.payers,
-                default_court_fee=default_fee,
-                key_prefix="edit",
-            )
-            edit_participants = st.multiselect(
-                "참여자",
-                names,
-                default=selected.participants,
-                format_func=lambda value: member_label(members, value),
-            )
-
-            c1, c2 = st.columns(2)
-            with c1:
-                save_edit = st.form_submit_button("수정 저장", use_container_width=True)
-            with c2:
-                delete_session = st.form_submit_button(
-                    "주차 삭제", use_container_width=True
-                )
-
-        if save_edit:
+        c1, c2 = st.columns(2)
+        if c1.button("수정 저장", use_container_width=True, key="save_session_edit"):
             if not edit_payers:
                 st.error("비용 지불자와 결제 금액을 입력해 주세요.")
             elif not edit_participants:
@@ -342,7 +335,7 @@ with tab_register:
                 st.success(f"{selected.week}주차를 수정했습니다.")
                 st.rerun()
 
-        if delete_session:
+        if c2.button("주차 삭제", use_container_width=True, key="delete_session"):
             current_sessions.pop(selected_index)
             save_sessions(reg_y, reg_m, current_sessions)
             st.success(f"{selected.week}주차 기록을 삭제했습니다.")

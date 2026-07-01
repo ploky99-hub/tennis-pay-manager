@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from calculator import Payer, Session
-from members import normalize_members
+from members import migrate_config, normalize_members
 
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
@@ -25,6 +25,9 @@ def load_config() -> dict:
         raise FileNotFoundError("config.json not found")
 
     config["members"] = normalize_members(config.get("members", []))
+    config, migrated = migrate_config(config)
+    if migrated:
+        save_config(config)
     return config
 
 

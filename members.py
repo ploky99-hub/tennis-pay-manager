@@ -4,6 +4,16 @@ import re
 from typing import Any
 
 
+DEFAULT_MEMBERS: list[dict[str, Any]] = [
+    {"name": "김혁진", "nickname": "ploky", "twins_benefit": False},
+    {"name": "전도영", "nickname": "왕다람이", "twins_benefit": False},
+    {"name": "전상권", "nickname": "nabi", "twins_benefit": False},
+    {"name": "이민우", "nickname": "오늘발리만빵꾸", "twins_benefit": True},
+    {"name": "서정욱", "nickname": "guttr0503", "twins_benefit": True},
+    {"name": "김영진", "nickname": "세레나영리엄스", "twins_benefit": False},
+]
+
+
 def normalize_members(raw_members: list[Any]) -> list[dict[str, Any]]:
     if not raw_members:
         return []
@@ -71,3 +81,44 @@ def default_payer_amount(member: dict[str, Any], default_court_fee: int) -> int:
     if member.get("twins_benefit"):
         return default_court_fee // 2
     return default_court_fee
+
+
+def is_legacy_members(members: list[dict[str, Any]]) -> bool:
+    if not members:
+        return True
+
+    if all(member.get("nickname") == member["name"] for member in members):
+        return True
+
+    legacy_names = {"김혁진", "전도영", "전상권", "이민우", "서정욱"}
+    current_names = {member["name"] for member in members}
+    if current_names == legacy_names:
+        return True
+
+    return False
+
+
+def migrate_config(config: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    changed = False
+    members = normalize_members(config.get("members", []))
+
+    if is_legacy_members(members):
+        config["members"] = [member.copy() for member in DEFAULT_MEMBERS]
+        changed = True
+    else:
+        config["members"] = members
+
+    if "default_court_fee" not in config:
+        config["default_court_fee"] = int(config.pop("court_fee", 11000))
+        changed = True
+
+    for old_key in ("base_monthly_fee", "court_fee", "absence_deadline_note"):
+        if old_key in config:
+            config.pop(old_key)
+            changed = True
+
+    if "weeks_per_month" not in config:
+        config["weeks_per_month"] = 4
+        changed = True
+
+    return config, changed
