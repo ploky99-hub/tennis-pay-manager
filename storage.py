@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from calculator import Session
+from calculator import Payer, Session
+from members import normalize_members
 
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
@@ -15,13 +16,16 @@ def load_config() -> dict:
     DATA_DIR.mkdir(exist_ok=True)
     if CONFIG_PATH.exists():
         with CONFIG_PATH.open(encoding="utf-8") as f:
-            return json.load(f)
-    if DEFAULT_CONFIG_PATH.exists():
+            config = json.load(f)
+    elif DEFAULT_CONFIG_PATH.exists():
         with DEFAULT_CONFIG_PATH.open(encoding="utf-8") as f:
             config = json.load(f)
         save_config(config)
-        return config
-    raise FileNotFoundError("config.json not found")
+    else:
+        raise FileNotFoundError("config.json not found")
+
+    config["members"] = normalize_members(config.get("members", []))
+    return config
 
 
 def save_config(config: dict) -> None:
@@ -51,16 +55,30 @@ def _load_month_raw(year: int, month: int) -> dict:
     return raw
 
 
+def _parse_payers(item: dict) -> list[Payer]:
+    if item.get("payers"):
+        return [
+            Payer(name=payer["name"], amount=int(payer["amount"]))
+            for payer in item["payers"]
+            if int(payer.get("amount", 0)) > 0
+        ]
+    if item.get("payer"):
+        return [Payer(name=item["payer"], amount=int(item["amount_paid"]))]
+    return []
+
+
 def load_sessions(year: int, month: int) -> list[Session]:
     raw = _load_month_raw(year, month)
     sessions: list[Session] = []
     for item in raw["sessions"]:
         participants = list(dict.fromkeys(item.get("participants", [])))
+        payers = _parse_payers(item)
+        if not payers:
+            continue
         sessions.append(
             Session(
                 week=int(item["week"]),
-                payer=item["payer"],
-                amount_paid=int(item["amount_paid"]),
+                payers=payers,
                 participants=participants,
             )
         )
@@ -74,8 +92,10 @@ def save_sessions(year: int, month: int, sessions: list[Session]) -> None:
         "sessions": [
             {
                 "week": session.week,
-                "payer": session.payer,
-                "amount_paid": session.amount_paid,
+                "payers": [
+                    {"name": payer.name, "amount": payer.amount}
+                    for payer in session.payers
+                ],
                 "participants": session.participants,
             }
             for session in sorted(sessions, key=lambda session: session.week)

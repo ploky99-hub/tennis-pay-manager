@@ -1,5 +1,12 @@
 {
-  "members": ["멤버A", "멤버B", "멤버C", "멤버D", "멤버E"],
+  "members": [
+    {"name": "김혁진", "nickname": "ploky", "twins_benefit": false},
+    {"name": "전도영", "nickname": "왕다람이", "twins_benefit": false},
+    {"name": "전상권", "nickname": "nabi", "twins_benefit": false},
+    {"name": "이민우", "nickname": "오늘발리만빵꾸", "twins_benefit": true},
+    {"name": "서정욱", "nickname": "guttr0503", "twins_benefit": true},
+    {"name": "김영진", "nickname": "세레나영리엄스", "twins_benefit": false}
+  ],
   "default_court_fee": 11000,
   "weeks_per_month": 4
 }
